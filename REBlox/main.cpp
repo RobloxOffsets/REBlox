@@ -10,6 +10,9 @@
 #include <algorithm>
 #include "globals/reblox.h"
 
+#undef min
+#undef max
+
 #pragma comment(lib, "d3d11.lib")
 
 ID3D11Device* g_pd3dDevice = nullptr;
@@ -164,6 +167,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
 			{
 				ImGui::Dummy({ 0, 5 });
 				ImGui::Checkbox("Offsets", &reblox::memory::addOffsets);
+
 				if (reblox::memory::addOffsets)
 				{
 					static uintptr_t offsetValue = 0;
@@ -181,6 +185,20 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
 					if (ImGui::Button("Clear offsets"))
 					{
 						reblox::memory::relativeOffsets.clear();
+					}
+
+					if (!reblox::memory::relativeOffsets.empty())
+					{
+						int listBoxHeight = std::min((int)reblox::memory::relativeOffsets.size(), 7) * 20;
+
+						ImGui::BeginListBox("##Offsets", ImVec2(0, listBoxHeight));
+
+						for (size_t i = 0; i < reblox::memory::relativeOffsets.size(); ++i)
+						{
+							ImGui::Text("Offset %zu: %p", i, reblox::memory::relativeOffsets[i]);
+						}
+
+						ImGui::EndListBox();
 					}
 				}
 				ImGui::Dummy(ImVec2(0, 2));
