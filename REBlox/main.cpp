@@ -30,6 +30,13 @@ void CleanupRenderTarget();
 static bool ShowProcessPicker = false;
 static std::vector<reblox::memory::PE32> ProcessList;
 
+// Memory View Variables
+static uint64_t memoryViewAddress = 0;
+static std::vector<uint8_t> memoryViewBuffer;
+static const size_t BYTES_PER_ROW = 16;
+static const size_t ROWS_TO_DISPLAY = 32;
+static const size_t BUFFER_SIZE = BYTES_PER_ROW * ROWS_TO_DISPLAY;
+
 void ResetAttachedProcess()
 {
 	reblox::memory::state.pid = 0;
@@ -37,6 +44,32 @@ void ResetAttachedProcess()
 	reblox::memory::state.process_base = 0;
 	ProcessList = reblox::memory::get_processes();
 }
+
+bool ReadMemoryForView(uint64_t address, size_t size, std::vector<uint8_t>& buffer)
+{
+	if (reblox::memory::state.proc == nullptr || reblox::memory::state.pid == 0)
+		return false;
+
+	buffer.resize(size);
+	SIZE_T bytesRead = 0;
+
+	BOOL success = ReadProcessMemory(
+		reblox::memory::state.proc,
+		(LPCVOID)address,
+		buffer.data(),
+		size,
+		&bytesRead
+	);
+
+	if (!success || bytesRead == 0)
+	{
+		std::fill(buffer.begin(), buffer.end(), 0); // fill with "??"
+		return false;
+	}
+
+	return true;
+}
+
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
 {
@@ -103,7 +136,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
 		enum class _tab
 		{
 			home,
-			memory
+			memory,
+			memoryview
 		} static tab = _tab::home;
 
 		// Tab selection
@@ -118,6 +152,13 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
 				if (ImGui::Button("Memory"))
 				{
 					tab = _tab::memory;
+				}
+				sl;
+				if (ImGui::Button("Memory View"))
+				{
+					tab = _tab::memoryview;
+					if (memoryViewAddress == 0)
+						memoryViewAddress = reblox::memory::state.process_base;
 				}
 			}
 		}
@@ -207,6 +248,118 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
 			if (ImGui::Button("Read"))
 			{
 
+			}
+		}
+		else if (tab == _tab::memoryview)
+		{
+			ImGui::Text("Memory View");
+			ImGui::Separator();
+
+			// Address input
+			static char addressBuf[32];
+			snprintf(addressBuf, sizeof(addressBuf), "0x%llX", memoryViewAddress);
+
+			ImGui::Text("Address:");
+			ImGui::SameLine();
+			ImGui::SetNextItemWidth(200);
+			if (ImGui::InputText("##MemViewAddress", addressBuf, sizeof(addressBuf), ImGuiInputTextFlags_CharsHexadecimal | ImGuiInputTextFlags_EnterReturnsTrue))
+			{
+				uint64_t value = 0;
+				if (sscanf_s(addressBuf, "%llx", &value) == 1)
+				{
+					memoryViewAddress = value;
+				}
+			}
+
+			ImGui::SameLine();
+			if (ImGui::Button("Refresh"))
+			{
+				ReadMemoryForView(memoryViewAddress, BUFFER_SIZE, memoryViewBuffer);
+			}
+
+			ImGui::SameLine();
+			if (ImGui::Button("Go to Base"))
+			{
+				memoryViewAddress = reblox::memory::state.process_base;
+				ReadMemoryForView(memoryViewAddress, BUFFER_SIZE, memoryViewBuffer);
+			}
+
+			ImGui::Separator();
+
+			static uint64_t lastAddress = 0;
+			if (memoryViewBuffer.empty() || lastAddress != memoryViewAddress)
+			{
+				ReadMemoryForView(memoryViewAddress, BUFFER_SIZE, memoryViewBuffer);
+				lastAddress = memoryViewAddress;
+			}
+
+			ImGui::BeginChild("MemoryViewScroll", ImVec2(0, 0), true, ImGuiWindowFlags_HorizontalScrollbar);
+			ImGui::PushFont(ImGui::GetIO().Fonts->Fonts[0]);
+			ImGui::Text("Address           00 01 02 03 04 05 06 07  08 09 0A 0B 0C 0D 0E 0F   ASCII");
+			ImGui::Separator();
+
+			for (size_t row = 0; row < ROWS_TO_DISPLAY; ++row)
+			{
+				uint64_t rowAddress = memoryViewAddress + (row * BYTES_PER_ROW);
+				char hexLine[128] = "";
+				char asciiLine[32] = "";
+				ImGui::Text("%016llX", rowAddress);
+				ImGui::SameLine();
+
+				for (size_t col = 0; col < BYTES_PER_ROW; ++col)
+				{
+					size_t idx = row * BYTES_PER_ROW + col;
+
+					if (idx < memoryViewBuffer.size())
+					{
+						uint8_t byte = memoryViewBuffer[idx];
+
+						// cool spacing
+						if (col == 8)
+							strcat_s(hexLine, " ");
+
+						char hexByte[8];
+						snprintf(hexByte, sizeof(hexByte), " %02X", byte);
+						strcat_s(hexLine, hexByte);
+
+						if (byte >= 32 && byte <= 126)
+							asciiLine[col] = (char)byte;
+						else
+							asciiLine[col] = '.';
+					}
+					else
+					{
+						strcat_s(hexLine, " ??");
+						asciiLine[col] = '?';
+					}
+				}
+
+				asciiLine[BYTES_PER_ROW] = '\0';
+
+				ImGui::SameLine();
+				ImGui::Text("%s", hexLine);
+				ImGui::SameLine();
+				ImGui::Text("  %s", asciiLine);
+			}
+
+			ImGui::PopFont();
+
+			ImGui::EndChild();
+
+			ImGui::Separator();
+			if (ImGui::Button("Previous Page"))
+			{
+				if (memoryViewAddress >= BUFFER_SIZE)
+				{
+					memoryViewAddress -= BUFFER_SIZE;
+					ReadMemoryForView(memoryViewAddress, BUFFER_SIZE, memoryViewBuffer);
+				}
+			}
+			ImGui::SameLine();
+			if (ImGui::Button("Next Page"))
+			{
+				memoryViewAddress += BUFFER_SIZE;
+				ReadMemoryForView(memoryViewAddress, BUFFER_SIZE, memoryViewBuffer);
 			}
 		}
 
@@ -299,8 +452,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
 								selectedIndex = n;
 							}
 
-							if (isSelected)
-								ImGui::SetScrollHereY();
+							// I don't like this because its buggy :(
+							//if (isSelected)
+							//	ImGui::SetScrollHereY();
 						}
 					}
 
@@ -319,9 +473,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
 					}
 					else
 					{
+						// Penguu why would you change this MessageBox? It obviously failed to Attach
 						ResetAttachedProcess();
-						//MessageBoxA(0, "Failed to attach! Try Running as Admin.", "Error!", 0);
-						MessageBoxA(0, "No process selected.", "Error!", 0);
+						MessageBoxA(0, "Failed to attach! Try Running as Admin.", "Error!", 0);
+						//MessageBoxA(0, "No process selected.", "Error!", 0);
 					}
 				}
 				ImGui::SameLine();
@@ -406,14 +561,7 @@ void CleanupRenderTarget()
 	if (g_mainRenderTargetView) { g_mainRenderTargetView->Release(); g_mainRenderTargetView = nullptr; }
 }
 
-// Forward declare message handler from imgui_impl_win32.cpp
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
-
-// Win32 message handler
-// You can read the io.WantCaptureMouse, io.WantCaptureKeyboard flags to tell if dear imgui wants to use your inputs.
-// - When io.WantCaptureMouse is true, do not dispatch mouse input data to your main application, or clear/overwrite your copy of the mouse data.
-// - When io.WantCaptureKeyboard is true, do not dispatch keyboard input data to your main application, or clear/overwrite your copy of the keyboard data.
-// Generally you may always pass all inputs to dear imgui, and hide them from your application based on those two flags.
 LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
 	if (ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam))
@@ -424,11 +572,11 @@ LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 	case WM_SIZE:
 		if (wParam == SIZE_MINIMIZED)
 			return 0;
-		g_ResizeWidth = (UINT)LOWORD(lParam); // Queue resize
+		g_ResizeWidth = (UINT)LOWORD(lParam);
 		g_ResizeHeight = (UINT)HIWORD(lParam);
 		return 0;
 	case WM_SYSCOMMAND:
-		if ((wParam & 0xfff0) == SC_KEYMENU) // Disable ALT application menu
+		if ((wParam & 0xfff0) == SC_KEYMENU)
 			return 0;
 		break;
 	case WM_DESTROY:
